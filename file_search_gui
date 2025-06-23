@@ -1,0 +1,254 @@
+import os
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+import threading
+import re
+
+class FileSearchGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Search Tool")
+        self.root.geometry("800x600")
+        self.root.minsize(600, 400)
+        
+        # Configure style
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        self.setup_ui()
+        self.search_thread = None
+        
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(3, weight=1)
+        
+        # Directory selection
+        ttk.Label(main_frame, text="Search Directory:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        
+        dir_frame = ttk.Frame(main_frame)
+        dir_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
+        dir_frame.columnconfigure(0, weight=1)
+        
+        self.dir_var = tk.StringVar()
+        self.dir_entry = ttk.Entry(dir_frame, textvariable=self.dir_var)
+        self.dir_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
+        
+        ttk.Button(dir_frame, text="Browse", command=self.browse_directory).grid(row=0, column=1)
+        
+        # Search term
+        ttk.Label(main_frame, text="Search Term:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
+        
+        search_frame = ttk.Frame(main_frame)
+        search_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
+        search_frame.columnconfigure(0, weight=1)
+        
+        self.search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        search_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
+        search_entry.bind('<Return>', lambda e: self.start_search())
+        
+        # Case sensitive option
+        self.case_sensitive_var = tk.BooleanVar()
+        case_check = ttk.Checkbutton(search_frame, text="Case Sensitive", variable=self.case_sensitive_var)
+        case_check.grid(row=0, column=1)
+        
+        # Search button and progress
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        
+        self.search_button = ttk.Button(button_frame, text="Search", command=self.start_search)
+        self.search_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.progress = ttk.Progressbar(button_frame, mode='indeterminate')
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        self.status_label = ttk.Label(button_frame, text="Ready")
+        self.status_label.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Results area
+        ttk.Label(main_frame, text="Results:").grid(row=3, column=0, sticky=(tk.W, tk.N))
+        
+        # Create frame for results with scrollbar
+        result_frame = ttk.Frame(main_frame)
+        result_frame.grid(row=3, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        result_frame.columnconfigure(0, weight=1)
+        result_frame.rowconfigure(0, weight=1)
+        
+        self.result_text = scrolledtext.ScrolledText(
+            result_frame, 
+            wrap=tk.WORD, 
+            height=20,
+            font=('Consolas', 10)
+        )
+        self.result_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure text tags for highlighting
+        self.result_text.tag_config("highlight", background="#ffeb3b", foreground="black", font=('Consolas', 10, 'bold'), relief="raised", borderwidth=1)
+        self.result_text.tag_config("path", foreground="#0066cc", font=('Consolas', 10, 'bold'))
+        self.result_text.tag_config("line_num", foreground="#009900")
+        
+    def browse_directory(self):
+        directory = filedialog.askdirectory()
+        if directory:
+            self.dir_var.set(directory)
+    
+    def start_search(self):
+        directory = self.dir_var.get().strip()
+        search_term = self.search_var.get().strip()
+        
+        if not directory:
+            messagebox.showerror("Error", "Please select a directory to search.")
+            return
+        
+        if not search_term:
+            messagebox.showerror("Error", "Please enter a search term.")
+            return
+        
+        if not os.path.exists(directory):
+            messagebox.showerror("Error", "The specified directory does not exist.")
+            return
+        
+        # Disable search button and start progress
+        self.search_button.config(state='disabled')
+        self.progress.start()
+        self.status_label.config(text="Searching...")
+        self.result_text.delete(1.0, tk.END)
+        
+        # Start search in separate thread
+        self.search_thread = threading.Thread(
+            target=self.perform_search, 
+            args=(directory, search_term)
+        )
+        self.search_thread.daemon = True
+        self.search_thread.start()
+    
+    def perform_search(self, directory, search_term):
+        try:
+            case_sensitive = self.case_sensitive_var.get()
+            results = self.search_files(directory, search_term, case_sensitive)
+            # Update UI in main thread
+            self.root.after(0, self.display_results, results, search_term)
+        except Exception as e:
+            self.root.after(0, self.search_error, str(e))
+    
+    def search_error(self, error_msg):
+        self.progress.stop()
+        self.search_button.config(state='normal')
+        self.status_label.config(text="Error occurred")
+        messagebox.showerror("Search Error", f"An error occurred during search:\n{error_msg}")
+    
+    def display_results(self, results, search_term):
+        self.progress.stop()
+        self.search_button.config(state='normal')
+        
+        if not results:
+            self.status_label.config(text="No matches found")
+            self.result_text.insert(tk.END, "No matches found.")
+            return
+        
+        self.status_label.config(text=f"Found {len(results)} match(es)")
+        
+        for i, (filepath, line_num, line_content) in enumerate(results):
+            if i > 0:
+                self.result_text.insert(tk.END, "\n\n")
+            
+            # Insert file path and line number
+            path_line = f"{filepath} (line {line_num}):\n"
+            start_pos = self.result_text.index(tk.END + "-1c")
+            self.result_text.insert(tk.END, path_line)
+            end_pos = self.result_text.index(tk.END + "-1c")
+            self.result_text.tag_add("path", start_pos, end_pos)
+            
+            # Insert content with highlighting
+            self.insert_highlighted_text(line_content, search_term)
+    
+    def insert_highlighted_text(self, text, search_term):
+        if not search_term:
+            self.result_text.insert(tk.END, text + "\n")
+            return
+        
+        # Find all occurrences of search term (case sensitive or insensitive based on option)
+        case_sensitive = self.case_sensitive_var.get()
+        
+        if case_sensitive:
+            search_text = text
+            search_pattern = re.escape(search_term)
+        else:
+            search_text = text.lower()
+            search_pattern = re.escape(search_term.lower())
+        
+        # Find all matches and their positions
+        matches = []
+        for match in re.finditer(search_pattern, search_text):
+            start, end = match.span()
+            matches.append((start, end))
+        
+        if not matches:
+            # No matches found, just insert the text
+            self.result_text.insert(tk.END, text + "\n")
+            return
+        
+        # Build the text with proper highlighting
+        last_end = 0
+        for start, end in matches:
+            # Insert text before the match
+            if start > last_end:
+                self.result_text.insert(tk.END, text[last_end:start])
+            
+            # Insert the highlighted match with tag
+            self.result_text.insert(tk.END, text[start:end], "highlight")
+            
+            last_end = end
+        
+        # Insert remaining text after the last match
+        if last_end < len(text):
+            self.result_text.insert(tk.END, text[last_end:])
+        
+        self.result_text.insert(tk.END, "\n")
+    
+    def is_text_file(self, filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                chunk = f.read(2048)
+                return b'\x00' not in chunk  # crude binary check
+        except:
+            return False
+    
+    def search_in_file(self, filepath, keyword, case_sensitive=False):
+        matches = []
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
+                for i, line in enumerate(file, 1):
+                    if case_sensitive:
+                        if keyword in line:
+                            matches.append((filepath, i, line.strip()))
+                    else:
+                        if keyword.lower() in line.lower():
+                            matches.append((filepath, i, line.strip()))
+        except Exception as e:
+            pass
+        return matches
+    
+    def search_files(self, directory, keyword, case_sensitive=False):
+        results = []
+        for root, _, files in os.walk(directory):
+            for file in files:
+                full_path = os.path.join(root, file)
+                if self.is_text_file(full_path):
+                    results.extend(self.search_in_file(full_path, keyword, case_sensitive))
+        return results
+
+def main():
+    root = tk.Tk()
+    app = FileSearchGUI(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
