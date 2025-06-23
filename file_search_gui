@@ -27,7 +27,7 @@ class FileSearchGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         
         # Directory selection
         ttk.Label(main_frame, text="Search Directory:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
@@ -54,14 +54,28 @@ class FileSearchGUI:
         search_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 10))
         search_entry.bind('<Return>', lambda e: self.start_search())
         
+        # Options frame
+        options_frame = ttk.Frame(main_frame)
+        options_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
         # Case sensitive option
         self.case_sensitive_var = tk.BooleanVar()
-        case_check = ttk.Checkbutton(search_frame, text="Case Sensitive", variable=self.case_sensitive_var)
-        case_check.grid(row=0, column=1)
+        case_check = ttk.Checkbutton(options_frame, text="Case Sensitive", variable=self.case_sensitive_var)
+        case_check.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # Context lines option
+        self.context_lines_var = tk.BooleanVar()
+        context_check = ttk.Checkbutton(options_frame, text="Include Context Lines", variable=self.context_lines_var)
+        context_check.pack(side=tk.LEFT, padx=(0, 20))
+        
+        # No duplicate results option
+        self.no_duplicates_var = tk.BooleanVar()
+        no_duplicates_check = ttk.Checkbutton(options_frame, text="No Duplicate Results", variable=self.no_duplicates_var)
+        no_duplicates_check.pack(side=tk.LEFT)
         
         # Search button and progress
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
         
         self.search_button = ttk.Button(button_frame, text="Search", command=self.start_search)
         self.search_button.pack(side=tk.LEFT, padx=(0, 10))
@@ -73,11 +87,11 @@ class FileSearchGUI:
         self.status_label.pack(side=tk.RIGHT, padx=(10, 0))
         
         # Results area
-        ttk.Label(main_frame, text="Results:").grid(row=3, column=0, sticky=(tk.W, tk.N))
+        ttk.Label(main_frame, text="Results:").grid(row=4, column=0, sticky=(tk.W, tk.N))
         
         # Create frame for results with scrollbar
         result_frame = ttk.Frame(main_frame)
-        result_frame.grid(row=3, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        result_frame.grid(row=4, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         result_frame.columnconfigure(0, weight=1)
         result_frame.rowconfigure(0, weight=1)
         
@@ -132,7 +146,9 @@ class FileSearchGUI:
     def perform_search(self, directory, search_term):
         try:
             case_sensitive = self.case_sensitive_var.get()
-            results = self.search_files(directory, search_term, case_sensitive)
+            context_lines = self.context_lines_var.get()
+            no_duplicates = self.no_duplicates_var.get()
+            results = self.search_files(directory, search_term, case_sensitive, context_lines, no_duplicates)
             # Update UI in main thread
             self.root.after(0, self.display_results, results, search_term)
         except Exception as e:
@@ -155,19 +171,41 @@ class FileSearchGUI:
         
         self.status_label.config(text=f"Found {len(results)} match(es)")
         
-        for i, (filepath, line_num, line_content) in enumerate(results):
+        for i, result in enumerate(results):
             if i > 0:
                 self.result_text.insert(tk.END, "\n\n")
             
-            # Insert file path and line number
-            path_line = f"{filepath} (line {line_num}):\n"
-            start_pos = self.result_text.index(tk.END + "-1c")
-            self.result_text.insert(tk.END, path_line)
-            end_pos = self.result_text.index(tk.END + "-1c")
-            self.result_text.tag_add("path", start_pos, end_pos)
-            
-            # Insert content with highlighting
-            self.insert_highlighted_text(line_content, search_term)
+            if isinstance(result, tuple) and len(result) == 3:
+                # Old format: (filepath, line_num, line_content)
+                filepath, line_num, line_content = result
+                # Insert file path and line number
+                path_line = f"{filepath} (line {line_num}):\n"
+                start_pos = self.result_text.index(tk.END + "-1c")
+                self.result_text.insert(tk.END, path_line)
+                end_pos = self.result_text.index(tk.END + "-1c")
+                self.result_text.tag_add("path", start_pos, end_pos)
+                
+                # Insert content with highlighting
+                self.insert_highlighted_text(line_content, search_term)
+            else:
+                # New format: (filepath, context_data)
+                filepath, context_data = result
+                # Insert file path
+                path_line = f"{filepath}:\n"
+                start_pos = self.result_text.index(tk.END + "-1c")
+                self.result_text.insert(tk.END, path_line)
+                end_pos = self.result_text.index(tk.END + "-1c")
+                self.result_text.tag_add("path", start_pos, end_pos)
+                
+                # Insert context data
+                for line_info in context_data:
+                    line_num, line_content, is_match = line_info
+                    if is_match:
+                        # Highlight the matched line
+                        self.insert_highlighted_text(line_content, search_term)
+                    else:
+                        # Regular context line
+                        self.result_text.insert(tk.END, line_content + "\n")
     
     def insert_highlighted_text(self, text, search_term):
         if not search_term:
@@ -221,28 +259,82 @@ class FileSearchGUI:
         except:
             return False
     
-    def search_in_file(self, filepath, keyword, case_sensitive=False):
+    def search_in_file(self, filepath, keyword, case_sensitive=False, context_lines=False, no_duplicates=False):
         matches = []
+        all_lines = []
+        
         try:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
-                for i, line in enumerate(file, 1):
+                all_lines = file.readlines()
+                
+            if context_lines:
+                # Get context lines for each match
+                context_results = []
+                seen_contexts = set() if no_duplicates else None
+                
+                for i, line in enumerate(all_lines, 1):
+                    line_content = line.rstrip('\n\r')
                     if case_sensitive:
-                        if keyword in line:
-                            matches.append((filepath, i, line.strip()))
+                        if keyword in line_content:
+                            context_data = self.get_context_lines(all_lines, i-1, 2)  # 2 lines above and below
+                            if no_duplicates:
+                                context_key = tuple((line_num, line.strip()) for line_num, line, _ in context_data)
+                                if context_key not in seen_contexts:
+                                    seen_contexts.add(context_key)
+                                    context_results.append((filepath, context_data))
+                            else:
+                                context_results.append((filepath, context_data))
                     else:
-                        if keyword.lower() in line.lower():
-                            matches.append((filepath, i, line.strip()))
+                        if keyword.lower() in line_content.lower():
+                            context_data = self.get_context_lines(all_lines, i-1, 2)  # 2 lines above and below
+                            if no_duplicates:
+                                context_key = tuple((line_num, line.strip()) for line_num, line, _ in context_data)
+                                if context_key not in seen_contexts:
+                                    seen_contexts.add(context_key)
+                                    context_results.append((filepath, context_data))
+                            else:
+                                context_results.append((filepath, context_data))
+                
+                return context_results
+            else:
+                # Original behavior without context lines
+                for i, line in enumerate(all_lines, 1):
+                    line_content = line.rstrip('\n\r')
+                    if case_sensitive:
+                        if keyword in line_content:
+                            matches.append((filepath, i, line_content))
+                    else:
+                        if keyword.lower() in line_content.lower():
+                            matches.append((filepath, i, line_content))
+                
+                return matches
+                
         except Exception as e:
             pass
-        return matches
+        return matches if not context_lines else []
     
-    def search_files(self, directory, keyword, case_sensitive=False):
+    def get_context_lines(self, all_lines, match_index, context_size=2):
+        """Get context lines around a match"""
+        context_data = []
+        start_line = max(0, match_index - context_size)
+        end_line = min(len(all_lines), match_index + context_size + 1)
+        
+        for i in range(start_line, end_line):
+            line_num = i + 1
+            line_content = all_lines[i].rstrip('\n\r')
+            is_match = (i == match_index)
+            context_data.append((line_num, line_content, is_match))
+        
+        return context_data
+    
+    def search_files(self, directory, keyword, case_sensitive=False, context_lines=False, no_duplicates=False):
         results = []
         for root, _, files in os.walk(directory):
             for file in files:
                 full_path = os.path.join(root, file)
                 if self.is_text_file(full_path):
-                    results.extend(self.search_in_file(full_path, keyword, case_sensitive))
+                    file_results = self.search_in_file(full_path, keyword, case_sensitive, context_lines, no_duplicates)
+                    results.extend(file_results)
         return results
 
 def main():
