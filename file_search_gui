@@ -104,7 +104,8 @@ class FileSearchGUI:
         left_frame = ttk.Frame(result_frame)
         left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         left_frame.columnconfigure(0, weight=1)
-        left_frame.rowconfigure(0, weight=1)
+        left_frame.rowconfigure(0, weight=0)  # Label does not expand
+        left_frame.rowconfigure(1, weight=1)  # Only the text widget expands
         
         ttk.Label(left_frame, text="Search Results:").grid(row=0, column=0, sticky=tk.W)
         
