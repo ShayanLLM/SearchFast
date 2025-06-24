@@ -73,13 +73,9 @@ class FileSearchGUI:
         no_duplicates_check = ttk.Checkbutton(options_frame, text="No Duplicate Results", variable=self.no_duplicates_var)
         no_duplicates_check.pack(side=tk.LEFT)
         
-        # Show skipped files option
-        self.show_skipped_var = tk.BooleanVar()
-        show_skipped_check = ttk.Checkbutton(options_frame, text="Show Skipped Files", variable=self.show_skipped_var)
-        show_skipped_check.pack(side=tk.LEFT, padx=(20, 0))
-        
         # Prepare a variable to store skipped files
         self.skipped_files = []
+        self.skipped_extensions = set()
         
         # Search button and progress
         button_frame = ttk.Frame(main_frame)
@@ -101,20 +97,50 @@ class FileSearchGUI:
         result_frame = ttk.Frame(main_frame)
         result_frame.grid(row=4, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         result_frame.columnconfigure(0, weight=1)
+        result_frame.columnconfigure(1, weight=1)
         result_frame.rowconfigure(0, weight=1)
         
+        # Left side - Search results
+        left_frame = ttk.Frame(result_frame)
+        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+        left_frame.columnconfigure(0, weight=1)
+        left_frame.rowconfigure(0, weight=1)
+        
+        ttk.Label(left_frame, text="Search Results:").grid(row=0, column=0, sticky=tk.W)
+        
         self.result_text = scrolledtext.ScrolledText(
-            result_frame, 
+            left_frame, 
             wrap=tk.WORD, 
             height=20,
             font=('Consolas', 10)
         )
-        self.result_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.result_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Right side - Skipped files
+        right_frame = ttk.Frame(result_frame)
+        right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(1, weight=1)
+        
+        ttk.Label(right_frame, text="Skipped Files:").grid(row=0, column=0, sticky=tk.W)
+        
+        self.skipped_text = scrolledtext.ScrolledText(
+            right_frame, 
+            wrap=tk.WORD, 
+            height=20,
+            font=('Consolas', 10)
+        )
+        self.skipped_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure text tags for highlighting
         self.result_text.tag_config("highlight", background="#ffeb3b", foreground="black", font=('Consolas', 10, 'bold'), relief="raised", borderwidth=1)
         self.result_text.tag_config("path", foreground="#0066cc", font=('Consolas', 10, 'bold'))
         self.result_text.tag_config("line_num", foreground="#009900")
+        
+        # Configure text tags for skipped files
+        self.skipped_text.tag_config("header", foreground="#cc6600", font=('Consolas', 10, 'bold'))
+        self.skipped_text.tag_config("extensions", foreground="#009900", font=('Consolas', 10, 'bold'))
+        self.skipped_text.tag_config("count", foreground="#666666", font=('Consolas', 10, 'italic'))
         
     def browse_directory(self):
         directory = filedialog.askdirectory()
@@ -142,6 +168,11 @@ class FileSearchGUI:
         self.progress.start()
         self.status_label.config(text="Searching...")
         self.result_text.delete(1.0, tk.END)
+        self.skipped_text.delete(1.0, tk.END)
+        
+        # Reset skipped files tracking
+        self.skipped_files = []
+        self.skipped_extensions = set()
         
         # Start search in separate thread
         self.search_thread = threading.Thread(
@@ -156,8 +187,7 @@ class FileSearchGUI:
             case_sensitive = self.case_sensitive_var.get()
             context_lines = self.context_lines_var.get()
             no_duplicates = self.no_duplicates_var.get()
-            show_skipped = self.show_skipped_var.get()
-            results = self.search_files(directory, search_term, case_sensitive, context_lines, no_duplicates, show_skipped)
+            results = self.search_files(directory, search_term, case_sensitive, context_lines, no_duplicates)
             # Update UI in main thread
             self.root.after(0, self.display_results, results, search_term)
         except Exception as e:
@@ -213,11 +243,34 @@ class FileSearchGUI:
                         else:
                             line_with_number = f"  {line_num}: {line_content}\n"
                             self.result_text.insert(tk.END, line_with_number)
-        # Show skipped files if enabled
-        if self.show_skipped_var.get() and self.skipped_files:
-            self.result_text.insert(tk.END, "\n\n--- Skipped Files (not searched) ---\n")
-            for skipped in self.skipped_files:
-                self.result_text.insert(tk.END, skipped + "\n")
+        
+        # Display skipped files in side panel
+        self.display_skipped_files()
+    
+    def display_skipped_files(self):
+        """Display skipped files in the side panel with extension summaries"""
+        if not self.skipped_files:
+            self.skipped_text.insert(tk.END, "No files skipped.")
+            return
+        
+        # Header
+        header = "--- Skipped Files (not searched) ---\n"
+        self.skipped_text.insert(tk.END, header, "header")
+        
+        # Extension summary
+        if self.skipped_extensions:
+            extensions = [ext for ext in self.skipped_extensions if ext]
+            if extensions:
+                ext_summary = f"File types: {', '.join(sorted(extensions))}\n"
+                self.skipped_text.insert(tk.END, ext_summary, "extensions")
+        
+        # Count
+        count_text = f"Total skipped: {len(self.skipped_files)} files\n\n"
+        self.skipped_text.insert(tk.END, count_text, "count")
+        
+        # File list
+        for skipped in sorted(self.skipped_files):
+            self.skipped_text.insert(tk.END, skipped + "\n")
     
     def insert_highlighted_text(self, text, search_term):
         if not search_term:
@@ -420,7 +473,7 @@ class FileSearchGUI:
         
         return context_data
     
-    def search_files(self, directory, keyword, case_sensitive=False, context_lines=False, no_duplicates=False, show_skipped=False):
+    def search_files(self, directory, keyword, case_sensitive=False, context_lines=False, no_duplicates=False):
         results = []
         
         for root, _, files in os.walk(directory):
@@ -431,8 +484,8 @@ class FileSearchGUI:
                     file_results = self.search_in_file(full_path, keyword, case_sensitive, context_lines, no_duplicates)
                     results.extend(file_results)
                 else:
-                    if show_skipped:
-                        self.skipped_files.append(full_path)
+                    self.skipped_files.append(full_path)
+                    self.skipped_extensions.add(os.path.splitext(file)[1])
         return results
 
 def main():
