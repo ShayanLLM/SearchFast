@@ -73,6 +73,14 @@ class FileSearchGUI:
         no_duplicates_check = ttk.Checkbutton(options_frame, text="No Duplicate Results", variable=self.no_duplicates_var)
         no_duplicates_check.pack(side=tk.LEFT)
         
+        # Show skipped files option
+        self.show_skipped_var = tk.BooleanVar()
+        show_skipped_check = ttk.Checkbutton(options_frame, text="Show Skipped Files", variable=self.show_skipped_var)
+        show_skipped_check.pack(side=tk.LEFT, padx=(20, 0))
+        
+        # Prepare a variable to store skipped files
+        self.skipped_files = []
+        
         # Search button and progress
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
@@ -148,7 +156,8 @@ class FileSearchGUI:
             case_sensitive = self.case_sensitive_var.get()
             context_lines = self.context_lines_var.get()
             no_duplicates = self.no_duplicates_var.get()
-            results = self.search_files(directory, search_term, case_sensitive, context_lines, no_duplicates)
+            show_skipped = self.show_skipped_var.get()
+            results = self.search_files(directory, search_term, case_sensitive, context_lines, no_duplicates, show_skipped)
             # Update UI in main thread
             self.root.after(0, self.display_results, results, search_term)
         except Exception as e:
@@ -167,45 +176,48 @@ class FileSearchGUI:
         if not results:
             self.status_label.config(text="No matches found")
             self.result_text.insert(tk.END, "No matches found.")
-            return
-        
-        self.status_label.config(text=f"Found {len(results)} match(es)")
-        
-        for i, result in enumerate(results):
-            if i > 0:
-                self.result_text.insert(tk.END, "\n\n")
-            
-            if isinstance(result, tuple) and len(result) == 3:
-                # Old format: (filepath, line_num, line_content)
-                filepath, line_num, line_content = result
-                # Insert file path and line number
-                path_line = f"{filepath} (line {line_num}):\n"
-                start_pos = self.result_text.index(tk.END + "-1c")
-                self.result_text.insert(tk.END, path_line)
-                end_pos = self.result_text.index(tk.END + "-1c")
-                self.result_text.tag_add("path", start_pos, end_pos)
-                
-                # Insert content with highlighting
-                self.insert_highlighted_text(line_content, search_term)
-            else:
-                # New format: (filepath, context_data)
-                filepath, context_data = result
-                # Insert file path
-                path_line = f"{filepath}:\n"
-                start_pos = self.result_text.index(tk.END + "-1c")
-                self.result_text.insert(tk.END, path_line)
-                end_pos = self.result_text.index(tk.END + "-1c")
-                self.result_text.tag_add("path", start_pos, end_pos)
-                
-                # Insert context data
-                for line_info in context_data:
-                    line_num, line_content, is_match = line_info
-                    if is_match:
-                        # Highlight the matched line
-                        self.insert_highlighted_text(line_content, search_term)
+        else:
+            self.status_label.config(text=f"Found {len(results)} match(es)")
+            for i, result in enumerate(results):
+                if i > 0:
+                    self.result_text.insert(tk.END, "\n\n")
+                if isinstance(result, tuple) and len(result) == 3:
+                    filepath, line_num, line_content = result
+                    path_line = f"{filepath} (line {line_num}):\n"
+                    start_pos = self.result_text.index(tk.END + "-1c")
+                    self.result_text.insert(tk.END, path_line)
+                    end_pos = self.result_text.index(tk.END + "-1c")
+                    self.result_text.tag_add("path", start_pos, end_pos)
+                    self.insert_highlighted_text(line_content, search_term)
+                else:
+                    filepath, context_data = result
+                    match_line_num = None
+                    for line_info in context_data:
+                        line_num, line_content, is_match = line_info
+                        if is_match:
+                            match_line_num = line_num
+                            break
+                    if match_line_num:
+                        path_line = f"{filepath} (line {match_line_num}):\n"
                     else:
-                        # Regular context line
-                        self.result_text.insert(tk.END, line_content + "\n")
+                        path_line = f"{filepath}:\n"
+                    start_pos = self.result_text.index(tk.END + "-1c")
+                    self.result_text.insert(tk.END, path_line)
+                    end_pos = self.result_text.index(tk.END + "-1c")
+                    self.result_text.tag_add("path", start_pos, end_pos)
+                    for line_info in context_data:
+                        line_num, line_content, is_match = line_info
+                        if is_match:
+                            line_with_number = f"  {line_num}: {line_content}"
+                            self.insert_highlighted_text(line_with_number, search_term)
+                        else:
+                            line_with_number = f"  {line_num}: {line_content}\n"
+                            self.result_text.insert(tk.END, line_with_number)
+        # Show skipped files if enabled
+        if self.show_skipped_var.get() and self.skipped_files:
+            self.result_text.insert(tk.END, "\n\n--- Skipped Files (not searched) ---\n")
+            for skipped in self.skipped_files:
+                self.result_text.insert(tk.END, skipped + "\n")
     
     def insert_highlighted_text(self, text, search_term):
         if not search_term:
@@ -252,11 +264,92 @@ class FileSearchGUI:
         self.result_text.insert(tk.END, "\n")
     
     def is_text_file(self, filepath):
+        """Enhanced text file detection supporting many file types"""
+        # Get file extension
+        _, ext = os.path.splitext(filepath.lower())
+        
+        # Comprehensive list of text file extensions
+        text_extensions = {
+            # Programming languages
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css', '.scss', '.sass',
+            '.java', '.cpp', '.c', '.h', '.hpp', '.cs', '.php', '.rb', '.go', '.rs', '.swift',
+            '.kt', '.scala', '.pl', '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+            '.vbs', '.lua', '.r', '.m', '.sql', '.plsql', '.tcl', '.awk', '.sed',
+            
+            # Web and markup
+            '.xml', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.config',
+            '.md', '.markdown', '.rst', '.tex', '.latex', '.asciidoc', '.adoc',
+            
+            # Data formats
+            '.csv', '.tsv', '.txt', '.log', '.dat', '.asc', '.tab', '.psv',
+            
+            # Configuration files
+            '.env', '.properties', '.rc', '.profile', '.bashrc', '.zshrc', '.gitignore',
+            '.dockerfile', '.dockerignore', '.gitattributes', '.editorconfig',
+            
+            # Documentation
+            '.readme', '.license', '.changelog', '.version', '.authors', '.contributors',
+            
+            # Build and package files
+            '.makefile', '.mk', '.cmake', '.cmakelists', '.gradle', '.maven', '.pom',
+            '.package.json', '.package-lock.json', '.yarn.lock', '.composer.json',
+            '.requirements.txt', '.setup.py', '.pyproject.toml', '.cargo.toml',
+            '.gemfile', '.gemfile.lock', '.mix.exs', '.mix.lock',
+            
+            # IDE and editor files
+            '.vscode', '.idea', '.sublime-project', '.sublime-workspace',
+            
+            # Other text formats
+            '.diff', '.patch', '.svn', '.git', '.hg', '.bzr',
+            '.nfo', '.diz', '.sfv', '.md5', '.sha1', '.sha256'
+        }
+        
+        # Check if extension is in our known text extensions
+        if ext in text_extensions:
+            return True
+        
+        # For files without extensions or unknown extensions, do a more thorough check
         try:
             with open(filepath, 'rb') as f:
-                chunk = f.read(2048)
-                return b'\x00' not in chunk  # crude binary check
-        except:
+                # Read first 4KB to analyze
+                chunk = f.read(4096)
+                if not chunk:  # Empty file
+                    return True
+                
+                # Check for null bytes (binary indicator)
+                if b'\x00' in chunk:
+                    return False
+                
+                # Check for high percentage of printable ASCII/UTF-8 characters
+                printable_count = sum(1 for byte in chunk if 32 <= byte <= 126 or byte in (9, 10, 13))
+                printable_ratio = printable_count / len(chunk)
+                
+                # If more than 90% is printable, likely text
+                if printable_ratio > 0.9:
+                    return True
+                
+                # Check for common text file signatures
+                text_signatures = [
+                    b'#!',  # Shebang
+                    b'<?xml',  # XML
+                    b'<!DOCTYPE',  # HTML
+                    b'<html',  # HTML
+                    b'{',  # JSON
+                    b'[',  # JSON array
+                    b'#',  # Comments
+                    b'//',  # Comments
+                    b'/*',  # Comments
+                    b'<!--',  # HTML comments
+                ]
+                
+                chunk_str = chunk.decode('utf-8', errors='ignore')
+                for sig in text_signatures:
+                    if chunk_str.startswith(sig.decode('utf-8', errors='ignore')):
+                        return True
+                
+                return False
+                
+        except (IOError, OSError, UnicodeDecodeError):
             return False
     
     def search_in_file(self, filepath, keyword, case_sensitive=False, context_lines=False, no_duplicates=False):
@@ -327,14 +420,19 @@ class FileSearchGUI:
         
         return context_data
     
-    def search_files(self, directory, keyword, case_sensitive=False, context_lines=False, no_duplicates=False):
+    def search_files(self, directory, keyword, case_sensitive=False, context_lines=False, no_duplicates=False, show_skipped=False):
         results = []
+        
         for root, _, files in os.walk(directory):
             for file in files:
                 full_path = os.path.join(root, file)
+                
                 if self.is_text_file(full_path):
                     file_results = self.search_in_file(full_path, keyword, case_sensitive, context_lines, no_duplicates)
                     results.extend(file_results)
+                else:
+                    if show_skipped:
+                        self.skipped_files.append(full_path)
         return results
 
 def main():
