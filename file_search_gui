@@ -148,6 +148,38 @@ class FileSearchGUI:
         if directory:
             self.dir_var.set(directory)
     
+    def estimate_search_time(self, directory):
+        """Estimate the number of text files and time to search them using only file extensions for speed."""
+        # Use the same extension set as is_text_file
+        text_extensions = {
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css', '.scss', '.sass',
+            '.java', '.cpp', '.c', '.h', '.hpp', '.cs', '.php', '.rb', '.go', '.rs', '.swift',
+            '.kt', '.scala', '.pl', '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+            '.vbs', '.lua', '.r', '.m', '.sql', '.plsql', '.tcl', '.awk', '.sed',
+            '.xml', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.config',
+            '.md', '.markdown', '.rst', '.tex', '.latex', '.asciidoc', '.adoc',
+            '.csv', '.tsv', '.txt', '.log', '.dat', '.asc', '.tab', '.psv',
+            '.env', '.properties', '.rc', '.profile', '.bashrc', '.zshrc', '.gitignore',
+            '.dockerfile', '.dockerignore', '.gitattributes', '.editorconfig',
+            '.readme', '.license', '.changelog', '.version', '.authors', '.contributors',
+            '.makefile', '.mk', '.cmake', '.cmakelists', '.gradle', '.maven', '.pom',
+            '.package.json', '.package-lock.json', '.yarn.lock', '.composer.json',
+            '.requirements.txt', '.setup.py', '.pyproject.toml', '.cargo.toml',
+            '.gemfile', '.gemfile.lock', '.mix.exs', '.mix.lock',
+            '.vscode', '.idea', '.sublime-project', '.sublime-workspace',
+            '.diff', '.patch', '.svn', '.git', '.hg', '.bzr',
+            '.nfo', '.diz', '.sfv', '.md5', '.sha1', '.sha256'
+        }
+        file_count = 0
+        for root, _, files in os.walk(directory):
+            for file in files:
+                ext = os.path.splitext(file.lower())[1]
+                if ext in text_extensions:
+                    file_count += 1
+        avg_time_per_file = 0.02
+        estimated_time = file_count * avg_time_per_file
+        return file_count, estimated_time
+    
     def start_search(self):
         directory = self.dir_var.get().strip()
         search_term = self.search_var.get().strip()
@@ -164,10 +196,21 @@ class FileSearchGUI:
             messagebox.showerror("Error", "The specified directory does not exist.")
             return
         
+        # Estimate search time and show in status label
+        self.status_label.config(text="Estimating search time...")
+        self.root.update_idletasks()
+        file_count, estimated_time = self.estimate_search_time(directory)
+        if file_count == 0:
+            self.status_label.config(text="No searchable text files found.")
+            return
+        else:
+            self.status_label.config(
+                text=f"Estimated: {file_count} files, ~{estimated_time:.1f} sec"
+            )
+        
         # Disable search button and start progress
         self.search_button.config(state='disabled')
         self.progress.start()
-        self.status_label.config(text="Searching...")
         self.result_text.delete(1.0, tk.END)
         self.skipped_text.delete(1.0, tk.END)
         
